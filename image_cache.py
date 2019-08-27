@@ -5,58 +5,8 @@
 
 import sys, traceback, argparse, http.client, hashlib
 from typing import Dict, ClassVar, Any
-
-
-#------------------------------------------------------------------------------
-class Hash:
-    ''' Helper class to let us know if a file changes. 
-    '''
-    @staticmethod
-    def md5(contents: bytes) -> str:
-        h = hashlib.md5()
-        h.update(contents)
-        return h.digest()
-
-
-#------------------------------------------------------------------------------
-class Cache:
-    ''' Helper class to cache HTTP headers and file contents from an URL.
-    '''
-    # Content cache in a hashtable.  Assumes a single host.
-    # Format is {'URL', {'header': 'value', 
-    #                    'file_bytes': <file contents>}}
-    __cache: Dict[str, Dict[str, Any]] = {}
-
-    def __init__(self) -> None:
-        pass
-
-    def __repr__(self) -> str:
-        ret = ''
-        for k in self.__cache.keys():
-            ret += k + '\n'
-            for sk in self.__cache[k].items():
-                if sk[1] is not None and len(sk[1]) <= 70: 
-                    ret += f'  {sk[0]}: {sk[1]}\n'
-                else:
-                    ret += f'  {sk[0]}: ...\n' # don't print large values
-        return f'Cache:\n{ret}'
-
-    def clear(self) -> None:
-        self.__cache.clear()
-
-    def set(self, key: str, subkey: str, value: Any) -> None:
-        if key not in self.__cache: # add the first entry
-            self.__cache[key] = {subkey: value}
-        else: 
-            self.__cache[key][subkey] = value
-
-    def get(self, key: str, subkey: str) -> Any:
-        if key not in self.__cache: 
-            return None
-        elif subkey not in self.__cache[key]:
-            return None
-        else:
-            return self.__cache[key][subkey]
+from utils.hash import Hash
+from utils.cache import Cache
 
 
 #------------------------------------------------------------------------------
@@ -108,9 +58,11 @@ class FileFetchAndCache:
 
         # Get and cache the headers we care about from the response
         etag = resp.getheader(FileFetchAndCache.__etag)
-        self.cache.set(URL, FileFetchAndCache.__etag, etag)
+        if etag is not None:
+            self.cache.set(URL, FileFetchAndCache.__etag, etag)
         last_mod = resp.getheader(FileFetchAndCache.__last_modified)
-        self.cache.set(URL, FileFetchAndCache.__last_modified, last_mod)
+        if last_mod is not None:
+            self.cache.set(URL, FileFetchAndCache.__last_modified, last_mod)
 
         # If we fetched the file the first time, cache it
         if resp.status == 200:
@@ -138,7 +90,9 @@ if __name__ == "__main__":
     try:
         # Application defaults
         HOST = 'static.rbxcdn.com'
-        URL = '/images/landing/Rollercoaster/whatsroblox_12072017.jpg'
+        URL1 = '/images/landing/Rollercoaster/whatsroblox_12072017.jpg'
+        URL2 = '/images/landing/Rollercoaster/gameimage3_12072017.jpg' 
+        URL3 = '/images/landing/Rollercoaster/devices_people_12072017.png'
 
         # Command line arg parsing
         parser = argparse.ArgumentParser(description='file fetch and cache')
@@ -147,29 +101,39 @@ if __name__ == "__main__":
                 help='Enable verbose logging')
         parser.add_argument('-H', '--host', type=str, default=HOST, 
                 help=f'Host in hostname:port format.  Default is {HOST}')
-        parser.add_argument('-U', '--URL', type=str, default=URL, 
-                help=f'URL to fetch.  Default is {URL}')
+        parser.add_argument('-U1', '--URL1', type=str, default=URL1, 
+                help=f'URL1 to fetch.  Default is {URL1}')
+        parser.add_argument('-U2', '--URL2', type=str, default=URL2, 
+                help=f'URL2 to fetch.  Default is {URL2}')
+        parser.add_argument('-U3', '--URL3', type=str, default=URL3, 
+                help=f'URL3 to fetch.  Default is {URL3}')
         args = parser.parse_args()
         
         # Our fetch and cache class
         ffac = FileFetchAndCache(verbose=args.verbose)
 
-        # Fetch the same file two times, and see if it cached
-        fetched_file_hash = None
-        cached_file_hash = None
-        for _ in range(2): # Get the file two times
-            success, from_cache, file_bytes = ffac.get(args.host, args.URL)
-            if success and not from_cache:
-                fetched_file_hash = Hash.md5(file_bytes)
-                print(f'Fetched and cached the file!')
-            elif success and from_cache:
-                cached_file_hash = Hash.md5(file_bytes)
-                print(f'Got the file from the cache!')
-            else:
-                print(f'Error: Did not fetch file {args.URL}')
+        # Fetch and cache the files.
+        files = [args.URL1, args.URL2, args.URL3]
+        fetched_file_hashes = [None] * len(files)
+        cached_file_hashes = [None] * len(files)
+        for i in range(len(files)): # Fetch each file.
+            for _ in range(2): # Fetch each two times, to test cache.
+                success, from_cache, file_bytes = ffac.get(args.host, files[i])
+                if success and not from_cache:
+                    fetched_file_hashes[i] = Hash.md5(file_bytes)
+                    print(f'Fetched and cached {files[i]}')
+                elif success and from_cache:
+                    cached_file_hashes[i] = Hash.md5(file_bytes)
+                    print(f'Cache hit for {files[i]}')
+                else:
+                    print(f'Error: Did not fetch file {files[i]}')
+                    break
+            print()
 
-        if fetched_file_hash != cached_file_hash:
-            print('Error: the file we fetched does not match the cached file')
+        # Validate
+        for i in range(len(files)): 
+            if fetched_file_hashes[i] != cached_file_hashes[i]:
+                print('Error: hashes do not match.')
 
     except Exception as e:
         exc_type, exc_value, exc_traceback = sys.exc_info()
