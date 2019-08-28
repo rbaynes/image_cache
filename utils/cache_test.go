@@ -13,9 +13,10 @@ func TestCache(t *testing.T) {
 	cache := cache.New(100)
 	cache.Print()
 	t.Errorf("hi")
+	/* more testing TBD
 	cached_etag := cache.GetHeader(URL, ETAG)
 	cache.SetHeader(URL, ETAG, etag[0])
 	cache.SetFile(URL, file_bytes)
 	file_bytes = cache.GetFile(URL)
-	//debugrob:
+    */
 }
