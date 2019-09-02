@@ -7,11 +7,11 @@ My first Go application.
 package main
 
 import (
-	"./utils"
+	"./utils/cache"
+	"./utils/http"
 	"crypto/md5"
+	"flag"
 	"fmt"
-	"io/ioutil"
-	"net/http"
 )
 
 const (
@@ -32,36 +32,13 @@ const (
 	FILE_HASH  = "file_hash"
 )
 
-// Arguments: hostname and URL
-// Returns: status, response and file contents
-func http_get(host string,
-	URL string,
-	headers map[string]string) (int, http.Header, []byte) {
-
-	req, err := http.NewRequest("GET", "https://"+HOST+URL, nil)
-	for key, value := range headers {
-		req.Header.Add(key, value)
-	}
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if nil != err {
-		fmt.Println("Error:", err)
-		return 0, resp.Header, []byte("")
-	}
-
-	defer resp.Body.Close() // close response after we have read all the data
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if nil != err {
-		fmt.Println("Error:", err)
-		return 0, resp.Header, body
-	}
-	return resp.StatusCode, resp.Header, body
-}
-
 func main() {
+	// Command line args
+	var pverbose = flag.Bool("verbose", false, "Enable verbose output")
+	flag.Parse()
+
 	// Our header and file content cache.
-	cache := cache.New(200 * 1024)
+	cache := cache.New(200*1024, pverbose)
 
 	// The list of files we fetch / cache.
 	files := []string{URL1, URL2, URL3}
@@ -89,7 +66,7 @@ func main() {
 			}
 
 			// Get the file
-			status, headers, file_bytes := http_get(HOST, URL, req_headers)
+			status, headers, file_bytes := http.HTTP_GET(HOST, URL, req_headers)
 
 			// Get and cache the headers we care about from the response
 			etag := headers[ETAG]
@@ -107,6 +84,9 @@ func main() {
 				fmt.Println("Fetched and cached:", URL)
 				bytes := md5.Sum(file_bytes)
 				fetched_file_hash[f] = string(bytes[:])
+				if *pverbose {
+					cache.Print()
+				}
 
 			} else if 304 == status {
 				// Server says use our cached version
@@ -114,6 +94,9 @@ func main() {
 				fmt.Println("Cache hit for:", URL)
 				bytes := md5.Sum(file_bytes)
 				cached_file_hash[f] = string(bytes[:])
+				if *pverbose {
+					cache.Print()
+				}
 
 			} else {
 				fmt.Println("Error: unhandled status code:", status)
@@ -128,5 +111,8 @@ func main() {
 		if fetched_file_hash[f] != cached_file_hash[f] {
 			fmt.Println("Error: file hashes do not match")
 		}
+	}
+	if *pverbose {
+		cache.Print()
 	}
 }

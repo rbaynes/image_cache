@@ -1,2 +1,2 @@
 #!/bin/bash
-go test ./utils
+go test ./utils/cache ./utils/http

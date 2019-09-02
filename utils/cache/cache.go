@@ -18,6 +18,7 @@ type cache_item struct {
 
 // Members of the cache 'class'.
 type cache struct {
+	verbose       bool
 	keys          map[string]cache_item // map of URL: item
 	max_bytes     int
 	current_bytes int
@@ -25,11 +26,16 @@ type cache struct {
 }
 
 // Construct a new cache and return it.
-func New(max_bytes int) cache {
+func New(max_bytes int, verbose *bool) cache {
 	keys := make(map[string]cache_item)
 	LRU := list.New()
-	c := cache{keys, max_bytes, 0, LRU}
+	c := cache{*verbose, keys, max_bytes, 0, LRU}
 	return c
+}
+
+// Return the number of bytes used by items in the cache.
+func (c *cache) UsedBytes() int {
+	return c.current_bytes
 }
 
 // Print the cache contents.
@@ -55,35 +61,78 @@ func (c *cache) Print() {
 
 // Set a header into the cache
 func (c *cache) SetHeader(key string, subkey string, value string) {
-	c.checkSizeAndEvict(len(value))        // Do we need to make room?
+	// Do we need to make room?
+	if !c.checkSizeAndEvict(len(value)) {
+		fmt.Println("Error: no space to store", key, subkey)
+		return
+	}
 	if item, found := c.keys[key]; found { // key exists, so add subkey
+		// does this subkey already exist?
+		if v, ok := item.headers[subkey]; ok {
+			// yes, so recover its space
+			item.item_size -= len(v)
+			c.current_bytes -= len(v)
+		}
 		item.headers[subkey] = value
 		item.item_size += len(value)
+		if c.verbose {
+			fmt.Println(">", key, subkey, "value size:", len(value),
+				"size before:", item.item_size-len(value),
+				"size after:", item.item_size)
+		}
 	} else { // key not found, so add it
 		headers := make(map[string]string)
 		headers[subkey] = value
 		item := cache_item{headers: headers, item_size: len(value)}
 		c.keys[key] = item
+		if c.verbose {
+			fmt.Println(">", key, subkey, "value size:", len(value))
+		}
 	}
 	c.current_bytes += len(value) // Total bytes in the cache
+	if c.verbose {
+		fmt.Println("> current_bytes:", c.current_bytes)
+	}
 	// Put this key in the front (most recently used) spot in the LRU list.
 	c.addHeadToLRU(key)
 }
 
 // Set a file into the cache
 func (c *cache) SetFile(key string, value []byte) {
-	c.checkSizeAndEvict(len(value))        // Do we need to make room?
+	// Do we need to make room?
+	if !c.checkSizeAndEvict(len(value)) {
+		fmt.Println("Error: no space to store file", key)
+		return
+	}
 	if item, found := c.keys[key]; found { // key exists, so set value
+		// does this file already exist?
+		if 0 < len(item.file_bytes) {
+			// yes, so recover its space
+			item.item_size -= len(item.file_bytes)
+			c.current_bytes -= len(item.file_bytes)
+		}
+
 		item.file_bytes = value
 		item.item_size += len(value)
 		c.keys[key] = item // replace item with updated one
+		if c.verbose {
+			fmt.Println(">", key, "file size:", len(value),
+				"size before:", item.item_size-len(value),
+				"size after:", item.item_size)
+		}
 	} else { // key not found, so add it
 		headers := make(map[string]string)
 		item := cache_item{headers: headers, file_bytes: value,
 			item_size: len(value)}
 		c.keys[key] = item
+		if c.verbose {
+			fmt.Println(">", key, "file size:", len(value))
+		}
 	}
 	c.current_bytes += len(value) // Total bytes in the cache
+	if c.verbose {
+		fmt.Println("> current_bytes:", c.current_bytes)
+	}
 	// Put this key in the front (most recently used) spot in the LRU list.
 	c.addHeadToLRU(key)
 }
@@ -133,31 +182,46 @@ func (c *cache) getLRU() string {
 }
 
 // Will adding this value exceed our our capacity?
-// If so, evict the LRU item to make room.
+// If so, evict as many LRU items as we need to, to make room.
 // Arguments: the size of the item to add.
-func (c *cache) checkSizeAndEvict(value_size int) {
-	if c.current_bytes+value_size < c.max_bytes {
-		return // Enough space in the cache, so nothing to do.
+func (c *cache) checkSizeAndEvict(value_size int) bool {
+	if value_size > c.max_bytes {
+		fmt.Println("Error: trying to store", value_size, "bytes in a cache "+
+			" of maximum size", c.max_bytes, "bytes")
+		return false
 	}
 
-	// Capacity will be exceeded, so get and evict the LRU
-	lru := c.getLRU()
-	if "" == lru {
-		return // The list/cache is empty
+	// Loop until we have freed as many LRU items as we need to,
+	// for space to store the new value.
+	for {
+		if c.current_bytes+value_size < c.max_bytes {
+			return true // There is enough space in cache for value.
+		}
+
+		lru := c.getLRU() // Get and evict the LRU
+		if "" == lru {
+			return true // The list/cache is empty
+		}
+
+		// Recover the bytes used by this item
+		recovered_bytes := c.keys[lru].item_size
+		c.current_bytes -= recovered_bytes
+		if c.verbose {
+			fmt.Println(">> recovered:", recovered_bytes,
+				"current_bytes before:", c.current_bytes+recovered_bytes,
+				"after:", c.current_bytes)
+		}
+		if 0 > c.current_bytes {
+			c.current_bytes = 0
+		}
+
+		// Remove the LRU from the cache dict
+		delete(c.keys, lru) // delete is a built in, works on maps.
+
+		// Remove the LRU from the list
+		c.removeFromLRU(lru)
+		fmt.Println("Evicted", lru, "from the cache and recovered",
+			recovered_bytes, "bytes.")
 	}
-
-	// Recover the bytes used by this item
-	recovered_bytes := c.keys[lru].item_size
-	c.current_bytes -= recovered_bytes
-	if 0 > c.current_bytes {
-		c.current_bytes = 0
-	}
-
-	// Remove the LRU from the cache dict
-	delete(c.keys, lru) // delete is a built in, works on maps.
-
-	// Remove the LRU from the list
-	c.removeFromLRU(lru)
-	fmt.Println("Evicted", lru, "from the cache and recovered", recovered_bytes,
-		"bytes.")
+	return true
 }
